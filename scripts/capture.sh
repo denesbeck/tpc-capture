@@ -285,9 +285,16 @@ generate_yaml() {
 read_or_esc() {
   local prompt="$1"
   local varname="$2"
+  local default="$3"
   local input="" char
 
   printf '%b' "$prompt"
+
+  # Pre-fill with default value
+  if [[ -n "$default" ]]; then
+    input="$default"
+    printf '%s' "$input"
+  fi
 
   while IFS= read -rsn1 char; do
     # Esc — drain any remaining bytes from escape sequence
@@ -330,6 +337,18 @@ echo ""
 
 yaml=$(generate_yaml) || die "Failed to generate layout."
 
+# Check for existing config
+ensure_config_dir
+hash=$(get_hash "$PWD")
+config_file="$TPC_CONFIG_DIR/${hash}.yml"
+
+existing_name=""
+existing_desc=""
+if [[ -f "$config_file" ]]; then
+  existing_name=$(yq '.layout.name // ""' "$config_file")
+  existing_desc=$(yq '.layout.description // ""' "$config_file")
+fi
+
 # Prompt for name and description
 echo -e "${C_BLUE}${C_BOLD}Details${C_RESET} ${C_DIM}(Esc to cancel)${C_RESET}"
 echo ""
@@ -337,19 +356,11 @@ echo ""
 layout_name=""
 layout_desc=""
 
-read_or_esc "$(echo -e "${C_MAUVE}  Layout name: ${C_RESET}")" layout_name || exit 0
-read_or_esc "$(echo -e "${C_MAUVE}  Description: ${C_RESET}")" layout_desc || exit 0
+read_or_esc "$(echo -e "${C_MAUVE}  Layout name: ${C_RESET}")" layout_name "$existing_name" || exit 0
+read_or_esc "$(echo -e "${C_MAUVE}  Description: ${C_RESET}")" layout_desc "$existing_desc" || exit 0
 
 layout_name="${layout_name:-$(basename "$PWD")}"
 layout_desc="${layout_desc:-}"
-
-# Inject name and description
-yaml=$(echo "$yaml" | NAME="$layout_name" DESC="$layout_desc" yq '.layout.name = env(NAME) | .layout.description = env(DESC)')
-
-# Save
-ensure_config_dir
-hash=$(get_hash "$PWD")
-config_file="$TPC_CONFIG_DIR/${hash}.yml"
 
 if [[ -f "$config_file" ]]; then
   echo ""
@@ -359,6 +370,9 @@ if [[ -f "$config_file" ]]; then
     exit 0
   fi
 fi
+
+# Inject name and description
+yaml=$(echo "$yaml" | NAME="$layout_name" DESC="$layout_desc" yq '.layout.name = env(NAME) | .layout.description = env(DESC)')
 
 echo "$yaml" > "$config_file"
 
