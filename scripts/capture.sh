@@ -7,20 +7,65 @@ source "$SCRIPT_DIR/common.sh"
 declare -a PANE_X PANE_Y PANE_W PANE_H PANE_CMD
 PANE_COUNT=0
 
+# Resolve the actual command running in a pane by inspecting the process tree.
+# - If the shell has no child process, the pane is idle → return nothing.
+# - Otherwise, return the child's command line, cleaning up interpreter prefixes
+#   (e.g. "node /path/to/npm-cli.js run dev" → "npm run dev").
+resolve_command() {
+  local pane_pid="$1"
+  local child_pid
+  child_pid=$(pgrep -P "$pane_pid" | head -1)
+  [[ -z "$child_pid" ]] && return
+
+  local args
+  args=$(ps -o args= -p "$child_pid" 2>/dev/null | sed 's/^ *//')
+  [[ -z "$args" ]] && return
+
+  local -a parts
+  read -ra parts <<< "$args"
+  local first
+  first=$(basename "${parts[0]}")
+
+  # When an interpreter runs a script via absolute path, simplify to the script name
+  # e.g. "node /usr/lib/node_modules/npm/bin/npm-cli.js run dev" → "npm run dev"
+  if [[ ${#parts[@]} -ge 2 && "${parts[1]}" == /* ]]; then
+    case "$first" in
+      node|python|python[0-9]*|ruby|perl)
+        local script
+        script=$(basename "${parts[1]}")
+        script="${script%-cli.js}"
+        script="${script%.js}"
+        if [[ ${#parts[@]} -gt 2 ]]; then
+          echo "$script ${parts[*]:2}"
+        else
+          echo "$script"
+        fi
+        return
+        ;;
+    esac
+  fi
+
+  if [[ ${#parts[@]} -gt 1 ]]; then
+    echo "$first ${parts[*]:1}"
+  else
+    echo "$first"
+  fi
+}
+
 collect_panes() {
   # Get the window ID that launched the popup (the parent window)
   local window
   window=$(tmux display-message -p -t '{last}' '#{window_id}')
 
   local i=0
-  while IFS=$'\t' read -r px py pw ph pcmd; do
+  while IFS=$'\t' read -r px py pw ph ppid; do
     PANE_X[$i]="$px"
     PANE_Y[$i]="$py"
     PANE_W[$i]="$pw"
     PANE_H[$i]="$ph"
-    PANE_CMD[$i]="$pcmd"
+    PANE_CMD[$i]=$(resolve_command "$ppid")
     i=$((i + 1))
-  done < <(tmux list-panes -t "$window" -F '#{pane_left}	#{pane_top}	#{pane_width}	#{pane_height}	#{pane_current_command}')
+  done < <(tmux list-panes -t "$window" -F '#{pane_left}	#{pane_top}	#{pane_width}	#{pane_height}	#{pane_pid}')
   PANE_COUNT=$i
 }
 
